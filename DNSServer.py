@@ -17,55 +17,50 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
-import ast
 
-# Ensure this file can be imported as DNSServer from another script
+
 sys.modules['DNSServer'] = sys.modules[__name__]
 
-def generate_aes_key(password, salt):
+
+def generate_aes_key(password: str, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
-        iterations=100000,
+        iterations=100_000,
         salt=salt,
-        length=32
+        length=32,
     )
-    key = kdf.derive(password.encode('utf-8'))
-    key = base64.urlsafe_b64encode(key)
-    return key
+    return base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
 
-def encrypt_with_aes(input_string, password, salt):
+
+def encrypt_with_aes(plain: str, password: str, salt: bytes) -> bytes:
     key = generate_aes_key(password, salt)
-    f = Fernet(key)
-    encrypted_data = f.encrypt(input_string.encode('utf-8'))
-    return encrypted_data
+    return Fernet(key).encrypt(plain.encode("utf-8"))
 
-def decrypt_with_aes(encrypted_data, password, salt):
+
+def decrypt_with_aes(cipher: bytes, password: str, salt: bytes) -> str:
     key = generate_aes_key(password, salt)
-    f = Fernet(key)
-    decrypted_data = f.decrypt(encrypted_data)
-    return decrypted_data.decode('utf-8')
+    return Fernet(key).decrypt(cipher).decode("utf-8")
 
-salt = b'Tandon'
-password = 'jy3991@nyu.edu'
-input_string = 'AlwaysWatching'
-encrypted_value = encrypt_with_aes(input_string, password, salt)
 
-def generate_sha256_hash(input_string):
-    sha256_hash = hashlib.sha256()
-    sha256_hash.update(input_string.encode('utf-8'))
-    return sha256_hash.hexdigest()
+salt = b"Tandon"
+password = "jy3991@nyu.edu"
+input_string = "AlwaysWatching"
+
+
+encrypted_value: bytes = encrypt_with_aes(input_string, password, salt)
+
 
 dns_records = {
-    'example.com.': {
-        dns.rdatatype.A: '192.168.1.101',
-        dns.rdatatype.AAAA: '2001:0db8:85a3:0000:0000:8a2e:0370:7334',
-        dns.rdatatype.MX: [(10, 'mail.example.com.')],
-        dns.rdatatype.CNAME: 'www.example.com.',
-        dns.rdatatype.NS: 'ns.example.com.',
-        dns.rdatatype.TXT: ('This is a TXT record',),
+    "example.com.": {
+        dns.rdatatype.A: "192.168.1.101",
+        dns.rdatatype.AAAA: "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+        dns.rdatatype.MX: [(10, "mail.example.com.")],
+        dns.rdatatype.CNAME: "www.example.com.",
+        dns.rdatatype.NS: "ns.example.com.",
+        dns.rdatatype.TXT: ("This is a TXT record",),
         dns.rdatatype.SOA: (
-            'ns1.example.com.',
-            'admin.example.com.',
+            "ns1.example.com.",
+            "admin.example.com.",
             2023081401,
             3600,
             1800,
@@ -73,101 +68,100 @@ dns_records = {
             86400,
         ),
     },
-    'safebank.com.': {
-        dns.rdatatype.A: '192.168.1.102',
+    "nyu.edu.": {
+        dns.rdatatype.A: "192.168.1.106",
+        dns.rdatatype.TXT: (
+            base64.b64encode(encrypted_value).decode("utf-8"),
+        ),
+        dns.rdatatype.MX: [(10, "mxa-00256a01.gslb.pphosted.com.")],
+        dns.rdatatype.AAAA: "2001:0db8:85a3:0000:0000:8a2e:0373:7312",
+        dns.rdatatype.NS: "ns1.nyu.edu.",
     },
-    'google.com.': {
-        dns.rdatatype.A: '192.168.1.103',
-    },
-    'legitsite.com.': {
-        dns.rdatatype.A: '192.168.1.104',
-    },
-    'yahoo.com.': {
-        dns.rdatatype.A: '192.168.1.105',
-    },
-    'nyu.edu.': {
-        dns.rdatatype.A: '192.168.1.106',
-        dns.rdatatype.TXT: (encrypted_value.decode('utf-8'),),  # Store directly as Fernet token (already base64)
-        dns.rdatatype.MX: [(10, 'mxa-00256a01.gslb.pphosted.com.')],
-        dns.rdatatype.AAAA: '2001:0db8:85a3:0000:0000:8a2e:0373:7312',
-        dns.rdatatype.NS: 'ns1.nyu.edu.',
-    },
+    "safebank.com.": {dns.rdatatype.A: "192.168.1.102"},
+    "google.com.": {dns.rdatatype.A: "192.168.1.103"},
+    "legitsite.com.": {dns.rdatatype.A: "192.168.1.104"},
+    "yahoo.com.": {dns.rdatatype.A: "192.168.1.105"},
 }
 
-def run_dns_server():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    server_socket.bind(('127.0.0.1', 53))
+def run_dns_server() -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 53))
 
     while True:
         try:
-            data, addr = server_socket.recvfrom(1024)
+            data, addr = sock.recvfrom(1024)
             request = dns.message.from_wire(data)
             response = dns.message.make_response(request)
 
-            question = request.question[0]
-            qname = question.name.to_text()
-            qtype = question.rdtype
+            q = request.question[0]
+            qname = q.name.to_text()
+            qtype = q.rdtype
 
             if qname in dns_records and qtype in dns_records[qname]:
-                answer_data = dns_records[qname][qtype]
+                record_data = dns_records[qname][qtype]
                 rdata_list = []
 
                 if qtype == dns.rdatatype.MX:
-                    for pref, server in answer_data:
-                        rdata_list.append(MX(dns.rdataclass.IN, dns.rdatatype.MX, pref, server))
+                    for pref, host in record_data:
+                        rdata_list.append(
+                            MX(dns.rdataclass.IN, dns.rdatatype.MX, pref, host)
+                        )
+
                 elif qtype == dns.rdatatype.SOA:
-                    mname, rname, serial, refresh, retry, expire, minimum = answer_data
-                    rdata_list.append(SOA(dns.rdataclass.IN, dns.rdatatype.SOA,
-                                          mname, rname, serial, refresh, retry, expire, minimum))
+                    rdata_list.append(
+                        SOA(
+                            dns.rdataclass.IN,
+                            dns.rdatatype.SOA,
+                            *record_data,
+                        )
+                    )
+
                 elif qtype == dns.rdatatype.TXT:
-                    if isinstance(answer_data, str):
-                        answer_iter = (answer_data,)
-                    else:
-                        answer_iter = answer_data
-                    for txt in answer_iter:
+                    # dnspython expects each TXT chunk quoted
+                    strings = record_data if isinstance(record_data, tuple) else (record_data,)
+                    for s in strings:
                         rdata_list.append(
                             dns.rdata.from_text(
-                                dns.rdataclass.IN,
-                                dns.rdatatype.TXT,
-                                f'"{txt}"'  # TXT must be quoted
+                                dns.rdataclass.IN, dns.rdatatype.TXT, f'"{s}"'
                             )
                         )
-                else:
-                    if isinstance(answer_data, str):
-                        rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, answer_data)]
-                    else:
-                        rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, d) for d in answer_data]
+
+                else:  # A, AAAA, CNAME, NS …
+                    items = record_data if isinstance(record_data, (list, tuple)) else (record_data,)
+                    for item in items:
+                        rdata_list.append(
+                            dns.rdata.from_text(dns.rdataclass.IN, qtype, item)
+                        )
 
                 for r in rdata_list:
-                    rrset = dns.rrset.RRset(question.name, dns.rdataclass.IN, qtype)
+                    rrset = dns.rrset.RRset(q.name, dns.rdataclass.IN, qtype)
                     rrset.ttl = 300
                     rrset.add(r)
                     response.answer.append(rrset)
 
-            response.flags |= 1 << 10
+            response.flags |= 1 << 10  # recursion-available
             print("Responding to request:", qname)
-            server_socket.sendto(response.to_wire(), addr)
+            sock.sendto(response.to_wire(), addr)
 
         except KeyboardInterrupt:
-            print('\nExiting...')
-            server_socket.close()
+            print("\nExiting …")
+            sock.close()
             sys.exit(0)
 
-def run_dns_server_user():
-    print("Input 'q' and hit 'enter' to quit")
-    print("DNS server is running...")
 
-    def user_input():
+def run_dns_server_user() -> None:
+    print("DNS server is running.  Type 'q' + Enter to quit.")
+
+    def watcher():
         while True:
-            cmd = input()
-            if cmd.lower() == 'q':
-                print('Quitting...')
+            if input().strip().lower() == "q":
                 os.kill(os.getpid(), signal.SIGINT)
 
-    input_thread = threading.Thread(target=user_input)
-    input_thread.daemon = True
-    input_thread.start()
+    t = threading.Thread(target=watcher, daemon=True)
+    t.start()
     run_dns_server()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     run_dns_server_user()
+
