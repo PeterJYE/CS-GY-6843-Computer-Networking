@@ -1,8 +1,6 @@
 import dns.message
 import dns.rdatatype
 import dns.rdataclass
-import dns.rdtypes
-import dns.rdtypes.ANY
 from dns.rdtypes.ANY.MX import MX
 from dns.rdtypes.ANY.SOA import SOA
 import dns.rdata
@@ -12,166 +10,140 @@ import threading
 import signal
 import os
 import sys
-
 import hashlib
+import base64
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import base64
-import ast
 
-def generate_aes_key(password, salt):
+# ──────────────────────────
+# 1.  AES-helper functions
+# ──────────────────────────
+def generate_aes_key(password: str, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        iterations=100000,
-        salt=salt,
-        length=32
+        algorithm=hashes.SHA256(), iterations=100_000,
+        salt=salt, length=32
     )
-    key = kdf.derive(password.encode('utf-8'))
-    key = base64.urlsafe_b64encode(key)
-    return key
+    return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
-# Lookup details on fernet in the cryptography.io documentation
-def encrypt_with_aes(input_string, password, salt):
+def encrypt_with_aes(plaintext: str, password: str, salt: bytes) -> str:
+    """Return a **string** token (base64/urlsafe)."""
     key = generate_aes_key(password, salt)
-    f = Fernet(key)
-    encrypted_data = f.encrypt(input_string.encode('utf-8')) #call the Fernet encrypt method
-    return encrypted_data
+    token_bytes = Fernet(key).encrypt(plaintext.encode())
+    return token_bytes.decode()          # <- string-cast for TXT record
 
-def decrypt_with_aes(encrypted_data, password, salt):
+def decrypt_with_aes(encrypted_data, password: str, salt: bytes) -> str:
+    """Works whether *encrypted_data* is bytes or str."""
+    if isinstance(encrypted_data, str):
+        encrypted_data = encrypted_data.encode()
     key = generate_aes_key(password, salt)
-    f = Fernet(key)
-    decrypted_data = f.decrypt(encrypted_data) #call the Fernet decrypt method
-    return decrypted_data.decode('utf-8')
+    plaintext_bytes = Fernet(key).decrypt(encrypted_data)
+    return plaintext_bytes.decode()
 
-salt = b'Tandon' # Remember it should be a byte-object
-password = 'jy3991@nyu.edu'
-input_string = 'AlwaysWatching'
+# ──────────────────────────
+# 2.  Encryption parameters
+# ──────────────────────────
+SALT      = b'Tandon'
+PASSWORD  = 'jy3991@nyu.edu'
+SECRET    = 'AlwaysWatching'
+TOKEN     = encrypt_with_aes(SECRET, PASSWORD, SALT)  # string token
 
-encrypted_value = encrypt_with_aes(input_string, password, salt) # exfil function
-decrypted_value = decrypt_with_aes(encrypted_value, password, salt)  # exfil function
-
-# For future use
-def generate_sha256_hash(input_string):
-    sha256_hash = hashlib.sha256()
-    sha256_hash.update(input_string.encode('utf-8'))
-    return sha256_hash.hexdigest()
-
-# A dictionary containing DNS records mapping hostnames to different types of DNS data.
+# ──────────────────────────
+# 3.  DNS record database
+# ──────────────────────────
 dns_records = {
     'example.com.': {
-        dns.rdatatype.A: '192.168.1.101',
+        dns.rdatatype.A:    '192.168.1.101',
         dns.rdatatype.AAAA: '2001:0db8:85a3:0000:0000:8a2e:0370:7334',
-        dns.rdatatype.MX: [(10, 'mail.example.com.')],  # List of (preference, mail server) tuples
-        dns.rdatatype.CNAME: 'www.example.com.',
-        dns.rdatatype.NS: 'ns.example.com.',
-        dns.rdatatype.TXT: ('This is a TXT record',),
+        dns.rdatatype.MX:   [(10, 'mail.example.com.')],
+        dns.rdatatype.CNAME:'www.example.com.',
+        dns.rdatatype.NS:   'ns.example.com.',
+        dns.rdatatype.TXT:  ('This is a TXT record',),
         dns.rdatatype.SOA: (
-            'ns1.example.com.', #mname
-            'admin.example.com.', #rname
-            2023081401, #serial
-            3600, #refresh
-            1800, #retry
-            604800, #expire
-            86400, #minimum
+            'ns1.example.com.', 'admin.example.com.',
+            2023081401, 3600, 1800, 604800, 86400
         ),
     },
-    'safebank.com.': {
-        dns.rdatatype.A: '192.168.1.102',
-    },
-    'google.com.': {
-        dns.rdatatype.A: '192.168.1.103',
-    },
-    'legitsite.com.': {
-        dns.rdatatype.A: '192.168.1.104',
-    },
-    'yahoo.com.': {
-        dns.rdatatype.A: '192.168.1.105',
-    },
+    'safebank.com.':  {dns.rdatatype.A: '192.168.1.102'},
+    'google.com.':    {dns.rdatatype.A: '192.168.1.103'},
+    'legitsite.com.': {dns.rdatatype.A: '192.168.1.104'},
+    'yahoo.com.':     {dns.rdatatype.A: '192.168.1.105'},
     'nyu.edu.': {
-        dns.rdatatype.A: '192.168.1.106',
-        dns.rdatatype.TXT: (encrypted_value.decode('utf-8'),),
-        dns.rdatatype.MX: [(10, 'mxa-00256a01.gslb.pphosted.com.')],
+        dns.rdatatype.A:    '192.168.1.106',
         dns.rdatatype.AAAA: '2001:0db8:85a3:0000:0000:8a2e:0373:7312',
-        dns.rdatatype.NS: 'ns1.nyu.edu.',
+        dns.rdatatype.TXT:  (TOKEN,),                      # exfil payload
+        dns.rdatatype.MX:   [(10, 'mxa-00256a01.gslb.pphosted.com.')],
+        dns.rdatatype.NS:   'ns1.nyu.edu.',
     },
-    # Add more records as needed (see assignment instructions!
 }
 
+# ──────────────────────────
+# 4.  DNS server logic
+# ──────────────────────────
 def run_dns_server():
-    # Create a UDP socket and bind it to the local IP address (what unique IP address is used here, similar to webserver lab) and port (the standard port for DNS)
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # Research this
-    server_socket.bind(('127.0.0.1', 53))
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 53))          # local test-only server
 
     while True:
         try:
-            # Wait for incoming DNS requests
-            data, addr = server_socket.recvfrom(1024)
-            # Parse the request using the `dns.message.from_wire` method
-            request = dns.message.from_wire(data)
-            # Create a response message using the `dns.message.make_response` method
+            data, addr = sock.recvfrom(2048)
+            request  = dns.message.from_wire(data)
             response = dns.message.make_response(request)
 
-            # Get the question from the request
-            question = request.question[0]
-            qname = question.name.to_text()
-            qtype = question.rdtype
+            q = request.question[0]
+            qname, qtype = q.name.to_text(), q.rdtype
 
-            # Check if there is a record in the `dns_records` dictionary that matches the question
             if qname in dns_records and qtype in dns_records[qname]:
-                # Retrieve the data for the record and create an appropriate `rdata` object for it
-                answer_data = dns_records[qname][qtype]
-
-                rdata_list = []
+                payload = dns_records[qname][qtype]
+                rdata_objs = []
 
                 if qtype == dns.rdatatype.MX:
-                    for pref, server in answer_data:
-                        rdata_list.append(MX(dns.rdataclass.IN, dns.rdatatype.MX, pref, server))
+                    for pref, host in payload:
+                        rdata_objs.append(MX(dns.rdataclass.IN, qtype, pref, host))
+
                 elif qtype == dns.rdatatype.SOA:
-                    mname, rname, serial, refresh, retry, expire, minimum = answer_data # What is the record format? See dns_records dictionary. Assume we handle @, Class, TTL elsewhere. Do some research on SOA Records
-                    rdata = SOA(dns.rdataclass.IN, dns.rdatatype.SOA, mname, rname, serial, refresh, retry, expire, minimum) # follow format from previous line
-                    rdata_list.append(rdata)
-                else:
-                    if isinstance(answer_data, str):
-                        rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, answer_data)]
-                    else:
-                        rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, data) for data in answer_data]
-                for rdata in rdata_list:
-                    rrset = dns.rrset.RRset(question.name, dns.rdataclass.IN, qtype)
-                    rrset.add(rdata)
-                    response.answer.append(rrset)
+                    mname, rname, serial, refresh, retry, expire, minimum = payload
+                    rdata_objs.append(SOA(dns.rdataclass.IN, qtype,
+                                          mname, rname, serial, refresh,
+                                          retry, expire, minimum))
+                else:  # A, AAAA, TXT, NS, etc.
+                    for item in (payload if isinstance(payload, tuple) else (payload,)):
+                        # Wrap TXT in quotes to preserve the full token
+                        txt = f'"{item}"' if qtype == dns.rdatatype.TXT else item
+                        rdata_objs.append(
+                            dns.rdata.from_text(dns.rdataclass.IN, qtype, txt)
+                        )
 
-            # Set the response flags
-            response.flags |= 1 << 10
+                # add answer section
+                rrset = dns.rrset.RRset(q.name, dns.rdataclass.IN, qtype)
+                for r in rdata_objs:
+                    rrset.add(r)
+                response.answer.append(rrset)
 
-            # Send the response back to the client using the `server_socket.sendto` method and put the response to_wire(), return to the addr you received from
-            print("Responding to request:", qname)
-            server_socket.sendto(response.to_wire(), addr)
+            # mark Authoritative Answer
+            response.flags |= (1 << 10)
+            print(f"Responding to request: {qname}")
+            sock.sendto(response.to_wire(), addr)
+
         except KeyboardInterrupt:
-            print('\nExiting...')
-            server_socket.close()
+            print("\nExiting...")
+            sock.close()
             sys.exit(0)
 
-
+# ──────────────────────────
+# 5.  Simple CLI wrapper
+# ──────────────────────────
 def run_dns_server_user():
-    print("Input 'q' and hit 'enter' to quit")
-    print("DNS server is running...")
+    print("DNS server running – press 'q' + ⏎ to quit.")
 
-    def user_input():
-        while True:
-            cmd = input()
-            if cmd.lower() == 'q':
-                print('Quitting...')
-                os.kill(os.getpid(), signal.SIGINT)
+    def watcher():
+        while input().lower() != 'q':
+            pass
+        os.kill(os.getpid(), signal.SIGINT)
 
-    input_thread = threading.Thread(target=user_input)
-    input_thread.daemon = True
-    input_thread.start()
+    t = threading.Thread(target=watcher, daemon=True)
+    t.start()
     run_dns_server()
-
 
 if __name__ == '__main__':
     run_dns_server_user()
-    #print("Encrypted Value:", encrypted_value)
-    #print("Decrypted Value:", decrypted_value)
-
