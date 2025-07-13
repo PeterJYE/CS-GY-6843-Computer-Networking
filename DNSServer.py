@@ -19,9 +19,8 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
 import ast
 
-# --- make sure the module is reachable under the name “DNSSServer” even
-# --- when executed as __main__
-sys.modules['DNSSServer'] = sys.modules[__name__]
+# Ensure this file can be imported as DNSServer from another script
+sys.modules['DNSServer'] = sys.modules[__name__]
 
 def generate_aes_key(password, salt):
     kdf = PBKDF2HMAC(
@@ -88,7 +87,7 @@ dns_records = {
     },
     'nyu.edu.': {
         dns.rdatatype.A: '192.168.1.106',
-        dns.rdatatype.TXT: (base64.b64encode(encrypted_value).decode('utf-8'),),
+        dns.rdatatype.TXT: (encrypted_value.decode('utf-8'),),  # Store directly as Fernet token (already base64)
         dns.rdatatype.MX: [(10, 'mxa-00256a01.gslb.pphosted.com.')],
         dns.rdatatype.AAAA: '2001:0db8:85a3:0000:0000:8a2e:0373:7312',
         dns.rdatatype.NS: 'ns1.nyu.edu.',
@@ -120,6 +119,19 @@ def run_dns_server():
                     mname, rname, serial, refresh, retry, expire, minimum = answer_data
                     rdata_list.append(SOA(dns.rdataclass.IN, dns.rdatatype.SOA,
                                           mname, rname, serial, refresh, retry, expire, minimum))
+                elif qtype == dns.rdatatype.TXT:
+                    if isinstance(answer_data, str):
+                        answer_iter = (answer_data,)
+                    else:
+                        answer_iter = answer_data
+                    for txt in answer_iter:
+                        rdata_list.append(
+                            dns.rdata.from_text(
+                                dns.rdataclass.IN,
+                                dns.rdatatype.TXT,
+                                f'"{txt}"'  # TXT must be quoted
+                            )
+                        )
                 else:
                     if isinstance(answer_data, str):
                         rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, answer_data)]
