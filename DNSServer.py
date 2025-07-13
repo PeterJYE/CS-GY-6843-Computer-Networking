@@ -6,6 +6,7 @@ import dns.rdtypes.ANY
 from dns.rdtypes.ANY.MX import MX
 from dns.rdtypes.ANY.SOA import SOA
 import dns.rdata
+import dns.rrset
 import socket
 import threading
 import signal
@@ -48,7 +49,6 @@ password = 'jy3991@nyu.edu'  # Replace with your NYU email
 input_string = 'AlwaysWatching'
 
 encrypted_value = encrypt_with_aes(input_string, password, salt) # exfil function
-decrypted_value = decrypt_with_aes(encrypted_value, password, salt)  # exfil function
 
 # For future use
 def generate_sha256_hash(input_string):
@@ -131,13 +131,17 @@ def run_dns_server():
                     rdata_list.append(rdata)
                 else:
                     if isinstance(answer_data, str):
-                        rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, answer_data)]
+                        if qtype == dns.rdatatype.TXT:
+                            rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, '"' + answer_data + '"')]
+                        else:
+                            rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, answer_data)]
                     else:
                         rdata_list = [dns.rdata.from_text(dns.rdataclass.IN, qtype, data) for data in answer_data]
 
+                rrset = dns.rrset.RRset(question.name, dns.rdataclass.IN, qtype)
                 for rdata in rdata_list:
-                    response.answer.append(dns.rrset.RRset(question.name, dns.rdataclass.IN, qtype))
-                    response.answer[-1].add(rdata)
+                    rrset.add(rdata)
+                response.answer.append(rrset)
 
             # Set the response flags
             response.flags |= 1 << 10
@@ -165,6 +169,9 @@ def run_dns_server_user():
     input_thread.daemon = True
     input_thread.start()
     run_dns_server()
+
+if __name__ == '__main__':
+    run_dns_server_user()
 
 if __name__ == '__main__':
     run_dns_server_user()
